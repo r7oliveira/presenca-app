@@ -1,17 +1,17 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Presença" />
-  <meta name="theme-color" content="#0a0a0a" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Presença"/>
+  <meta name="theme-color" content="#0a0a0a"/>
   <title>Presença ✦</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     html,body,#root{height:100%;background:#0a0a0a;overflow-x:hidden}
@@ -49,13 +49,11 @@ const LS = {
 // 3. Tier GRATUITO: 1.500 requisições/dia — perfeito para começar
 // Chave do Gemini — pode ser configurada pelo painel admin dentro do app
 const GEMINI_API_KEY = localStorage.getItem("presenca_gemini_key") || "cole-sua-chave-aqui";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-// ─────────────────────────────────────────────────────────────────────────
 
 async function callClaude({ system, messages, imageBase64, imageType, maxTokens = 1000 }) {
+  const key = GEMINI_API_KEY;
   const last = messages[messages.length - 1];
 
-  // Montar o conteúdo do usuário (com ou sem imagem)
   let userParts = [];
   if (imageBase64) {
     userParts.push({ inlineData: { mimeType: imageType || "image/jpeg", data: imageBase64 } });
@@ -64,42 +62,26 @@ async function callClaude({ system, messages, imageBase64, imageType, maxTokens 
     userParts.push({ text: last.content });
   }
 
-  // Montar histórico de mensagens no formato Gemini
   const history = messages.slice(0, -1).map(m => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: m.content }]
   }));
 
-  const body = {
-    systemInstruction: system ? { parts: [{ text: system }] } : undefined,
-    contents: [
-      ...history,
-      { role: "user", parts: userParts }
-    ],
-    generationConfig: {
-      maxOutputTokens: maxTokens,
-      temperature: 0.7,
-    }
-  };
+  const body = { contents: [...history, { role:"user", parts:userParts }], generationConfig:{ maxOutputTokens:maxTokens, temperature:0.7 } };
+  if (system) body.systemInstruction = { parts:[{ text:system }] };
 
-  // Remove systemInstruction se vazio
-  if (!body.systemInstruction) delete body.systemInstruction;
+  // Suporta AQ. (OAuth Bearer) e AIzaSy (API Key)
+  const isAQ = key.startsWith("AQ.");
+  const url = isAQ
+    ? "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+  const headers = { "Content-Type":"application/json" };
+  if (isAQ) headers["Authorization"] = `Bearer ${key}`;
 
-  const res = await fetch(GEMINI_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
+  const res  = await fetch(url, { method:"POST", headers, body:JSON.stringify(body) });
   const data = await res.json();
-
-  // Extrair texto da resposta do Gemini
-  if (data.error) {
-    console.error("Gemini error:", data.error);
-    throw new Error(data.error.message || "Erro na API Gemini");
-  }
-
-  return data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+  if (data.error) throw new Error(data.error.message || "Erro Gemini");
+  return data.candidates?.[0]?.content?.parts?.map(p => p.text||"").join("") || "";
 }
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -5349,10 +5331,7 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(App));
-setTimeout(() => {
-  const s = document.getElementById('splash');
-  if (s) { s.style.opacity='0'; setTimeout(()=>s.remove(),400); }
-}, 800);
+setTimeout(() => { const s=document.getElementById('splash'); if(s){s.style.opacity='0';setTimeout(()=>s.remove(),400);} }, 800);
 
   </script>
 </body>
