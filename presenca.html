@@ -47,7 +47,8 @@ const LS = {
 // 1. Acesse: aistudio.google.com → Get API Key → Create API Key
 // 2. Cole sua chave abaixo (começa com AIza...)
 // 3. Tier GRATUITO: 1.500 requisições/dia — perfeito para começar
-const GEMINI_API_KEY = "cole-sua-chave-aqui";
+// Chave do Gemini — pode ser configurada pelo painel admin dentro do app
+const GEMINI_API_KEY = localStorage.getItem("presenca_gemini_key") || "cole-sua-chave-aqui";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -666,6 +667,11 @@ function ReferralModal({ user, onClose, toast }) {
 }
 
 function ProfileTab({ user, profile, setProfile, isPremium, onPaywall, onLogout, toast, push }) {
+  const [showAdmin, setShowAdmin]   = useState(false);
+  const [adminKey, setAdminKey]     = useState(() => localStorage.getItem("presenca_gemini_key") || "");
+  const [adminPass, setAdminPass]   = useState("");
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const ADMIN_PASS = "presenca2025";
   const [editing, setEditing]       = useState(false);
   const [editName, setEditName]     = useState(user?.name || "");
   const [showBadges, setShowBadges] = useState(false);
@@ -886,8 +892,95 @@ function ProfileTab({ user, profile, setProfile, isPremium, onPaywall, onLogout,
         Sair da conta
       </button>
 
+      {/* ── Admin oculto — toque 5x no rodapé ── */}
+      <div style={{ textAlign:"center", marginTop:16, paddingBottom:8 }}>
+        <span onDoubleClick={() => setShowAdmin(true)} style={{ fontSize:10, color:"var(--surface3)", cursor:"default", userSelect:"none" }}>
+          v1.0 ✦
+        </span>
+      </div>
+
       {/* Referral modal */}
       {showReferral && <ReferralModal user={user} onClose={() => setShowReferral(false)} toast={toast} />}
+
+      {/* Admin modal */}
+      {showAdmin && (
+        <div style={{ position:"fixed", inset:0, zIndex:900, background:"rgba(0,0,0,.9)", display:"flex", alignItems:"flex-end", backdropFilter:"blur(10px)" }}>
+          <div style={{ background:"var(--surface)", borderRadius:"24px 24px 0 0", width:"100%", maxWidth:480, margin:"0 auto", padding:"28px 24px 48px", animation:"slideUp .3s ease" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+              <div>
+                <div style={{ fontSize:10, letterSpacing:3, color:"var(--accent)", textTransform:"uppercase", marginBottom:3, fontFamily:"'Syne',sans-serif" }}>Administrador</div>
+                <div style={{ fontSize:18, fontWeight:700, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>Configurações</div>
+              </div>
+              <button onClick={() => { setShowAdmin(false); setAdminPass(""); setAdminUnlocked(false); }} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:100, padding:"6px 12px", cursor:"pointer", fontSize:12, color:"var(--text2)" }}>
+                Fechar
+              </button>
+            </div>
+
+            {!adminUnlocked ? (
+              <>
+                <div style={{ fontSize:13, color:"var(--text2)", marginBottom:14 }}>Digite a senha de administrador para continuar.</div>
+                <input value={adminPass} onChange={e => setAdminPass(e.target.value)} type="password" placeholder="Senha admin"
+                  style={{ width:"100%", padding:"13px 16px", background:"var(--surface2)", border:"1px solid var(--border2)", borderRadius:12, fontSize:14, color:"var(--text)", outline:"none", fontFamily:"'Inter',sans-serif", marginBottom:12 }} />
+                <button onClick={() => {
+                  if (adminPass === ADMIN_PASS) { setAdminUnlocked(true); setAdminPass(""); }
+                  else { toast("Senha incorreta"); setAdminPass(""); }
+                }} style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg,var(--accent),var(--accent2))", border:"none", borderRadius:100, fontSize:13, color:"#000", fontWeight:700, cursor:"pointer", fontFamily:"'Syne',sans-serif" }}>
+                  Entrar
+                </button>
+              </>
+            ) : (
+              <>
+                {/* Chave do Gemini */}
+                <div style={{ marginBottom:20 }}>
+                  <div style={{ fontSize:11, fontWeight:600, color:"var(--text2)", marginBottom:6 }}>Chave da API Gemini</div>
+                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:10, lineHeight:1.5 }}>
+                    Acesse aistudio.google.com → Get API Key → Create API Key
+                  </div>
+                  <input value={adminKey} onChange={e => setAdminKey(e.target.value)} placeholder="AIzaSy... ou AQ.Ab8..." type="password"
+                    style={{ width:"100%", padding:"13px 16px", background:"var(--surface2)", border:`1px solid ${adminKey ? "var(--accent)" : "var(--border2)"}`, borderRadius:12, fontSize:13, color:"var(--text)", outline:"none", fontFamily:"'Inter',sans-serif", marginBottom:10 }} />
+
+                  {adminKey && (
+                    <div style={{ fontSize:11, color:"var(--accent)", marginBottom:10 }}>
+                      ✦ Chave: ...{adminKey.slice(-8)}
+                    </div>
+                  )}
+
+                  <button onClick={() => {
+                    if (!adminKey.trim()) { toast("Digite a chave primeiro"); return; }
+                    localStorage.setItem("presenca_gemini_key", adminKey.trim());
+                    toast("Chave salva! IA ativada ✦");
+                    setShowAdmin(false);
+                    setAdminUnlocked(false);
+                    setTimeout(() => window.location.reload(), 1000);
+                  }} style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg,var(--accent),var(--accent2))", border:"none", borderRadius:100, fontSize:13, color:"#000", fontWeight:700, cursor:"pointer", fontFamily:"'Syne',sans-serif", marginBottom:10 }}>
+                    ✦ Salvar e ativar IA
+                  </button>
+
+                  {localStorage.getItem("presenca_gemini_key") && (
+                    <button onClick={() => {
+                      localStorage.removeItem("presenca_gemini_key");
+                      setAdminKey("");
+                      toast("Chave removida");
+                    }} style={{ width:"100%", padding:"12px", background:"transparent", border:"1px solid var(--border)", borderRadius:100, fontSize:11, color:"var(--red)", cursor:"pointer" }}>
+                      Remover chave
+                    </button>
+                  )}
+                </div>
+
+                {/* Status da IA */}
+                <div style={{ background: localStorage.getItem("presenca_gemini_key") ? "rgba(62,207,142,.08)" : "rgba(248,113,113,.08)", border:`1px solid ${localStorage.getItem("presenca_gemini_key") ? "rgba(62,207,142,.2)" : "rgba(248,113,113,.2)"}`, borderRadius:12, padding:"12px 16px" }}>
+                  <div style={{ fontSize:12, fontWeight:600, color: localStorage.getItem("presenca_gemini_key") ? "var(--green)" : "var(--red)" }}>
+                    {localStorage.getItem("presenca_gemini_key") ? "✓ IA ativada e funcionando" : "✗ IA não configurada"}
+                  </div>
+                  <div style={{ fontSize:11, color:"var(--text3)", marginTop:3 }}>
+                    {localStorage.getItem("presenca_gemini_key") ? "Gemini 2.0 Flash · Grátis até 1.500 req/dia" : "Configure a chave acima para ativar"}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
