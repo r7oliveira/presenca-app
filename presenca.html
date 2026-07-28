@@ -48,10 +48,12 @@ const LS = {
 // 2. Cole sua chave abaixo (começa com AIza...)
 // 3. Tier GRATUITO: 1.500 requisições/dia — perfeito para começar
 // Chave do Gemini — pode ser configurada pelo painel admin dentro do app
-const GEMINI_API_KEY = localStorage.getItem("presenca_gemini_key") || "cole-sua-chave-aqui";
+// ─── PROXY URL (configurado pelo admin) ───────────────────────────────────
+// Após criar o Cloudflare Worker, cole a URL dele no painel admin do app
+const PROXY_URL = localStorage.getItem("presenca_proxy_url") || "";
+const GEMINI_API_KEY = localStorage.getItem("presenca_gemini_key") || "";
 
 async function callClaude({ system, messages, imageBase64, imageType, maxTokens = 1000 }) {
-  const key = GEMINI_API_KEY;
   const last = messages[messages.length - 1];
 
   let userParts = [];
@@ -67,21 +69,30 @@ async function callClaude({ system, messages, imageBase64, imageType, maxTokens 
     parts: [{ text: m.content }]
   }));
 
-  const body = { contents: [...history, { role:"user", parts:userParts }], generationConfig:{ maxOutputTokens:maxTokens, temperature:0.7 } };
+  const body = {
+    contents: [...history, { role:"user", parts:userParts }],
+    generationConfig: { maxOutputTokens:maxTokens, temperature:0.7 }
+  };
   if (system) body.systemInstruction = { parts:[{ text:system }] };
 
-  // Suporta AQ. (OAuth Bearer) e AIzaSy (API Key)
-  const isAQ = key.startsWith("AQ.");
-  const url = isAQ
-    ? "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-    : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
-  const headers = { "Content-Type":"application/json" };
-  if (isAQ) headers["Authorization"] = `Bearer ${key}`;
+  // Se tem proxy URL configurado — usa o Worker
+  if (PROXY_URL) {
+    const res  = await fetch(PROXY_URL, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(body) });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || "Erro Gemini");
+    return data.candidates?.[0]?.content?.parts?.map(p => p.text||"").join("") || "";
+  }
 
-  const res  = await fetch(url, { method:"POST", headers, body:JSON.stringify(body) });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || "Erro Gemini");
-  return data.candidates?.[0]?.content?.parts?.map(p => p.text||"").join("") || "";
+  // Fallback: chave direta (AIzaSy)
+  if (GEMINI_API_KEY && GEMINI_API_KEY.startsWith("AIzaSy")) {
+    const url  = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const res  = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(body) });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || "Erro Gemini");
+    return data.candidates?.[0]?.content?.parts?.map(p => p.text||"").join("") || "";
+  }
+
+  throw new Error("Configure a chave no painel admin (Eu → v1.0 ✦)");
 }
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -912,6 +923,22 @@ function ProfileTab({ user, profile, setProfile, isPremium, onPaywall, onLogout,
               </>
             ) : (
               <>
+                {/* Proxy URL */}
+                <div style={{ marginBottom:20 }}>
+                  <div style={{ fontSize:11, fontWeight:600, color:"var(--text2)", marginBottom:6 }}>URL do Proxy (Cloudflare Worker)</div>
+                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:10, lineHeight:1.5 }}>
+                    Cole aqui a URL do seu Worker após criar em workers.cloudflare.com
+                  </div>
+                  <input
+                    value={localStorage.getItem("presenca_proxy_url") || ""}
+                    onChange={e => localStorage.setItem("presenca_proxy_url", e.target.value)}
+                    placeholder="https://presenca-proxy.seu-usuario.workers.dev"
+                    style={{ width:"100%", padding:"13px 16px", background:"var(--surface2)", border:"1px solid var(--border2)", borderRadius:12, fontSize:12, color:"var(--text)", outline:"none", fontFamily:"'Inter',sans-serif", marginBottom:8 }} />
+                  {localStorage.getItem("presenca_proxy_url") && (
+                    <div style={{ fontSize:11, color:"var(--green)" }}>✓ Proxy configurado</div>
+                  )}
+                </div>
+
                 {/* Chave do Gemini */}
                 <div style={{ marginBottom:20 }}>
                   <div style={{ fontSize:11, fontWeight:600, color:"var(--text2)", marginBottom:6 }}>Chave da API Gemini</div>
