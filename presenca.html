@@ -5210,13 +5210,14 @@ function App() {
 
   const handleOnboardingDone = useCallback((answers)=>{ setProfile(answers); setShowOnboarding(false); },[]);
   const handleUpgrade = useCallback(()=>{ LS.set(`presenca_premium_${user.id}`,true); setIsPremium(true); setShowPaywall(false); toast("Bem-vindo ao Premium ✦"); },[user]);
-  const handleLogout = useCallback(()=>{ if (sb) sb.auth.signOut(); LS.del("presenca_user"); setUser(null); setProfile(null); setIsPremium(false); setActiveTab("Home"); },[]);
+  const clearLocal = useCallback(()=>{ LS.del("presenca_user"); setUser(null); setProfile(null); setIsPremium(false); setActiveTab("Home"); },[]);
+  const handleLogout = useCallback(()=>{ clearLocal(); if (sb) { try { sb.auth.signOut(); } catch(e) {} } },[clearLocal]);
 
   // Sessão real: se não houver sessão válida no Supabase, volta para a tela de login
   useEffect(() => {
     if (!sb) return;
-    sb.auth.getSession().then(({ data }) => { if (!data.session) handleLogout(); });
-    const { data: sub } = sb.auth.onAuthStateChange((evt) => { if (evt === "SIGNED_OUT") handleLogout(); });
+    sb.auth.getSession().then(({ data }) => { if (!data.session) clearLocal(); }).catch(() => {});
+    const { data: sub } = sb.auth.onAuthStateChange((evt) => { if (evt === "SIGNED_OUT") clearLocal(); });
     return () => sub.subscription.unsubscribe();
   }, []);
 
