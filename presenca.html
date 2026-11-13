@@ -49,6 +49,8 @@ const LS = {
 // Após criar o Cloudflare Worker, cole a URL dele no painel admin do app
 const PROXY_URL = localStorage.getItem("presenca_proxy_url") || "https://presenca-proxy.r7oliveirasantos.workers.dev";
 // ─── Supabase (chave pública: a proteção real está nas regras RLS do banco) ───
+// Fase beta: recursos de IA liberados para todos até existir cobrança real
+const BETA_OPEN = true;
 const SUPABASE_URL = "https://zpzzfvgzijrlnkaznhga.supabase.co";
 const SUPABASE_KEY = "sb_publishable_CaVGMMAqgu5lU1T74qnvNw_0Y5d07XW";
 const sb = (typeof window !== "undefined" && window.supabase) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
@@ -660,16 +662,397 @@ function ReferralModal({ user, onClose, toast }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// PARCEIROS · CORRIDAS RS · PAINEL ADMIN — dados reais (Supabase, protegidos por RLS)
+// ═══════════════════════════════════════════════════════════════════════════════
+const PARTNER_CATEGORIES = [
+  { id:"academia",      label:"Academia" },
+  { id:"personal",      label:"Personal trainer" },
+  { id:"assessoria",    label:"Assessoria de corrida" },
+  { id:"barbearia",     label:"Barbearia" },
+  { id:"salao",         label:"Salão de beleza" },
+  { id:"nutricionista", label:"Nutricionista" },
+  { id:"fisioterapia",  label:"Fisioterapia" },
+  { id:"bem_estar",     label:"Pilates, massagem e bem-estar" },
+  { id:"loja_fitness",  label:"Loja fitness ou esportiva" },
+  { id:"alimentacao",   label:"Alimentação saudável" },
+  { id:"consultor",     label:"Consultor de imagem e estilo" },
+  { id:"outro",         label:"Outro" },
+];
+const EVENT_DISTANCES = ["3 km", "5 km", "10 km", "15 km", "21 km", "42 km"];
+
+const PF_INPUT = { width:"100%", padding:"12px 14px", background:"var(--surface2)", border:"1px solid var(--border2)", borderRadius:12, fontSize:13, color:"var(--text)", outline:"none", fontFamily:"'Inter',sans-serif", marginBottom:10 };
+const PF_LINK = { padding:"9px 16px", borderRadius:100, fontSize:12, fontWeight:600, textDecoration:"none", display:"inline-flex", alignItems:"center", gap:6 };
+
+function waLink(num, text) {
+  let d = String(num || "").replace(/\D/g, "");
+  if (!d) return null;
+  if (d.length <= 11) d = "55" + d;
+  return "https://wa.me/" + d + (text ? "?text=" + encodeURIComponent(text) : "");
+}
+function safeUrl(u) {
+  try {
+    const x = new URL(String(u || "").trim());
+    return (x.protocol === "http:" || x.protocol === "https:") ? x.href : null;
+  } catch (e) { return null; }
+}
+function igLink(h) {
+  const s = String(h || "").trim().replace(/^@/, "").replace(/^https?:\/\/(www\.)?instagram\.com\//, "").replace(/\/.*$/, "");
+  return s ? "https://instagram.com/" + s : null;
+}
+
+function usePartners(category) {
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState("");
+  const load = useCallback(async () => {
+    if (!sb) { setItems([]); setErr("Conexão indisponível nesta visualização."); return; }
+    setItems(null);
+    let q = sb.from("partners").select("*").eq("status", "approved")
+      .order("plan", { ascending: false }).order("created_at", { ascending: false });
+    if (category) q = q.eq("category", category);
+    const { data, error } = await q;
+    if (error) { setErr("Não foi possível carregar agora."); setItems([]); }
+    else { setErr(""); setItems(data || []); }
+  }, [category]);
+  useEffect(() => { load(); }, [load]);
+  return { items, err, reload: load };
+}
+
+function PartnerCard({ p }) {
+  const wa = waLink(p.whatsapp, "Olá! Vi " + p.name + " no app Presença e gostaria de mais informações.");
+  const ig = igLink(p.instagram);
+  const cat = PARTNER_CATEGORIES.find(c => c.id === p.category);
+  return (
+    <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:18, padding:"16px 18px" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10, marginBottom:6 }}>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:15, fontWeight:600, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>{p.name}</div>
+          <div style={{ fontSize:11, color:"var(--text3)", marginTop:2 }}>{(cat ? cat.label : "") + (p.city ? " · " + p.city : "")}</div>
+        </div>
+        {p.plan === "premium" && (
+          <span style={{ fontSize:9, letterSpacing:1, color:"var(--accent)", border:"1px solid rgba(201,169,110,.3)", borderRadius:100, padding:"3px 9px", textTransform:"uppercase", flexShrink:0 }}>Destaque</span>
+        )}
+      </div>
+      {p.description && <p style={{ fontSize:12, color:"var(--text2)", lineHeight:1.55, margin:"8px 0 0" }}>{p.description}</p>}
+      {p.address && <div style={{ fontSize:11, color:"var(--text3)", marginTop:8 }}>{p.address}</div>}
+      <div style={{ display:"flex", gap:8, marginTop:12, flexWrap:"wrap" }}>
+        {wa && <a href={wa} target="_blank" rel="noopener noreferrer" style={{ ...PF_LINK, background:"#25d366", color:"#fff" }}>WhatsApp</a>}
+        {p.phone && <a href={"tel:" + String(p.phone).replace(/[^\d+]/g, "")} style={{ ...PF_LINK, background:"var(--surface2)", color:"var(--text)", border:"1px solid var(--border)" }}>Ligar</a>}
+        {ig && <a href={ig} target="_blank" rel="noopener noreferrer" style={{ ...PF_LINK, background:"var(--surface2)", color:"var(--text)", border:"1px solid var(--border)" }}>Instagram</a>}
+      </div>
+    </div>
+  );
+}
+
+function PartnersList({ category, user, toast, emptyTitle, emptyText, ctaLabel, flush }) {
+  const { items, err, reload } = usePartners(category);
+  const [showForm, setShowForm] = useState(false);
+  const [mine, setMine] = useState([]);
+  const uid = user ? user.id : null;
+  useEffect(() => {
+    if (!sb || !uid) return;
+    sb.from("partners").select("id,name,status,category").eq("owner_id", uid).neq("status", "approved")
+      .then(({ data }) => setMine((data || []).filter(m => !category || m.category === category)));
+  }, [category, uid, showForm]);
+  return (
+    <div style={{ padding: flush ? 0 : "0 20px" }}>
+      {mine.map(m => (
+        <div key={m.id} style={{ background:"rgba(201,169,110,.08)", border:"1px solid rgba(201,169,110,.2)", borderRadius:12, padding:"10px 14px", marginBottom:10, fontSize:12, color:"var(--accent)", lineHeight:1.5 }}>
+          {m.status === "pending" ? "Seu cadastro “" + m.name + "” está em análise." : "O cadastro “" + m.name + "” não foi aprovado."}
+        </div>
+      ))}
+      {items === null && <div style={{ textAlign:"center", padding:"40px 0" }}><Dots color="var(--text3)" /></div>}
+      {items !== null && err && <div style={{ fontSize:12, color:"var(--red)", textAlign:"center", padding:"24px 0" }}>{err}</div>}
+      {items !== null && !err && items.length === 0 && (
+        <div style={{ textAlign:"center", padding:"32px 12px 24px" }}>
+          <div style={{ fontSize:15, fontWeight:600, color:"var(--text)", fontFamily:"'Syne',sans-serif", marginBottom:8 }}>{emptyTitle || "Ainda não há parceiros aqui"}</div>
+          <div style={{ fontSize:12, color:"var(--text2)", lineHeight:1.6 }}>{emptyText || "Seja o primeiro a se cadastrar. O cadastro é gratuito."}</div>
+        </div>
+      )}
+      {items && items.length > 0 && (
+        <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:16 }}>
+          {items.map(p => <PartnerCard key={p.id} p={p} />)}
+        </div>
+      )}
+      <button onClick={() => setShowForm(true)} style={{ width:"100%", padding:"14px", background:"transparent", border:"1px solid rgba(201,169,110,.35)", borderRadius:100, fontSize:12, color:"var(--accent)", cursor:"pointer", fontWeight:600, fontFamily:"'Syne',sans-serif" }}>
+        {ctaLabel || "Cadastrar meu negócio"}
+      </button>
+      <div style={{ fontSize:10, color:"var(--text3)", textAlign:"center", marginTop:8, lineHeight:1.5 }}>Cadastro gratuito. Os dados aparecem para o público somente após aprovação.</div>
+      {showForm && <PartnerForm defaultCategory={category} user={user} toast={toast} onClose={() => setShowForm(false)} onDone={() => { setShowForm(false); reload(); }} />}
+    </div>
+  );
+}
+
+function PartnerForm({ defaultCategory, user, toast, onClose, onDone }) {
+  const [f, setF] = useState({ name:"", category: defaultCategory || "academia", description:"", city:"", address:"", phone:"", whatsapp:"", instagram:"" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const set = (k) => (e) => setF(v => ({ ...v, [k]: e.target.value }));
+  const submit = async () => {
+    setError("");
+    if (!sb || !user) { setError("Entre na sua conta para cadastrar."); return; }
+    if (f.name.trim().length < 2) { setError("Informe o nome do negócio."); return; }
+    if (!f.city.trim()) { setError("Informe a cidade."); return; }
+    if (!f.whatsapp.trim() && !f.phone.trim()) { setError("Informe um WhatsApp ou telefone para contato."); return; }
+    setBusy(true);
+    const row = {
+      owner_id: user.id, name: f.name.trim().slice(0, 80), category: f.category,
+      description: f.description.trim().slice(0, 400), city: f.city.trim().slice(0, 60),
+      address: f.address.trim().slice(0, 120), phone: f.phone.trim().slice(0, 20),
+      whatsapp: f.whatsapp.trim().slice(0, 20), instagram: f.instagram.trim().slice(0, 60)
+    };
+    const { error: err } = await sb.from("partners").insert(row);
+    setBusy(false);
+    if (err) { setError("Não foi possível enviar. Tente novamente."); return; }
+    toast("Cadastro enviado para aprovação ✦");
+    onDone();
+  };
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:800, background:"rgba(0,0,0,.8)", display:"flex", alignItems:"flex-end", backdropFilter:"blur(8px)" }}>
+      <div style={{ background:"var(--surface)", borderRadius:"24px 24px 0 0", width:"100%", maxWidth:480, margin:"0 auto", padding:"24px 22px 40px", maxHeight:"92vh", overflowY:"auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+          <div style={{ fontSize:18, fontWeight:700, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>Cadastrar negócio</div>
+          <button onClick={onClose} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:100, padding:"6px 12px", cursor:"pointer", fontSize:12, color:"var(--text2)" }}>Fechar</button>
+        </div>
+        <input value={f.name} onChange={set("name")} placeholder="Nome do negócio *" style={PF_INPUT} />
+        <select value={f.category} onChange={set("category")} style={PF_INPUT}>
+          {PARTNER_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+        <textarea value={f.description} onChange={set("description")} placeholder="Descrição (serviços, diferenciais)" rows={3} style={{ ...PF_INPUT, resize:"none" }} />
+        <input value={f.city} onChange={set("city")} placeholder="Cidade *" style={PF_INPUT} />
+        <input value={f.address} onChange={set("address")} placeholder="Endereço" style={PF_INPUT} />
+        <input value={f.whatsapp} onChange={set("whatsapp")} placeholder="WhatsApp com DDD" inputMode="tel" style={PF_INPUT} />
+        <input value={f.phone} onChange={set("phone")} placeholder="Telefone" inputMode="tel" style={PF_INPUT} />
+        <input value={f.instagram} onChange={set("instagram")} placeholder="Instagram (@usuario)" autoCapitalize="none" style={PF_INPUT} />
+        <div style={{ fontSize:10, color:"var(--text3)", lineHeight:1.5, margin:"2px 0 12px" }}>
+          Ao enviar, você declara que as informações são verdadeiras e autoriza a exibição pública dos dados de contato informados.
+        </div>
+        {error && <div style={{ fontSize:12, color:"var(--red)", marginBottom:10 }}>{error}</div>}
+        <button onClick={submit} disabled={busy} style={{ width:"100%", padding:"15px", background:"linear-gradient(135deg,var(--accent),var(--accent2))", border:"none", borderRadius:100, fontSize:13, color:"#000", fontWeight:700, cursor:"pointer", fontFamily:"'Syne',sans-serif" }}>
+          {busy ? "Enviando…" : "Enviar para aprovação"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function EventsRS({ user, toast }) {
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState("");
+  const [dist, setDist] = useState("");
+  const [q, setQ] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const load = useCallback(async () => {
+    if (!sb) { setItems([]); setErr("Conexão indisponível nesta visualização."); return; }
+    setItems(null);
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error } = await sb.from("events").select("*").eq("status", "approved").gte("event_date", today).order("event_date", { ascending: true });
+    if (error) { setErr("Não foi possível carregar agora."); setItems([]); }
+    else { setErr(""); setItems(data || []); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const shown = (items || []).filter(e =>
+    (!dist || (e.distances || []).includes(dist)) &&
+    (!q.trim() || (e.city + " " + e.name).toLowerCase().includes(q.trim().toLowerCase()))
+  );
+  const fmt = (d) => new Date(d + "T12:00:00").toLocaleDateString("pt-BR", { day:"2-digit", month:"short", year:"numeric" });
+  const share = async (e) => {
+    const text = e.name + " — " + fmt(e.event_date) + " em " + e.city + ". Veja no Presença.";
+    if (navigator.share) { try { await navigator.share({ title: e.name, text }); return; } catch (x) {} }
+    try { await navigator.clipboard.writeText(text); toast("Texto copiado ✦"); } catch (x) {}
+  };
+  return (
+    <div style={{ padding:"0 24px" }}>
+      <p style={{ fontSize:13, color:"var(--text2)", lineHeight:1.6, marginBottom:14 }}>Corridas de rua do Rio Grande do Sul, cadastradas por organizadores e aprovadas pela equipe do Presença.</p>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar por cidade ou nome" style={PF_INPUT} />
+      <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:6, marginBottom:12 }}>
+        {["", ...EVENT_DISTANCES].map(d => (
+          <button key={d || "todas"} onClick={() => setDist(d)} style={{ padding:"7px 14px", background: dist === d ? "linear-gradient(135deg,var(--blue),#3b82f6)" : "var(--surface)", border:"1px solid " + (dist === d ? "var(--blue)" : "var(--border)"), borderRadius:100, fontSize:11, color: dist === d ? "#fff" : "var(--text2)", cursor:"pointer", whiteSpace:"nowrap", flexShrink:0 }}>
+            {d || "Todas"}
+          </button>
+        ))}
+      </div>
+      {items === null && <div style={{ textAlign:"center", padding:"40px 0" }}><Dots color="var(--text3)" /></div>}
+      {items !== null && err && <div style={{ fontSize:12, color:"var(--red)", textAlign:"center", padding:"24px 0" }}>{err}</div>}
+      {items !== null && !err && shown.length === 0 && (
+        <div style={{ textAlign:"center", padding:"28px 12px" }}>
+          <div style={{ fontSize:15, fontWeight:600, color:"var(--text)", fontFamily:"'Syne',sans-serif", marginBottom:8 }}>{items.length === 0 ? "Ainda não há corridas cadastradas" : "Nenhuma corrida com esse filtro"}</div>
+          <div style={{ fontSize:12, color:"var(--text2)", lineHeight:1.6 }}>{items.length === 0 ? "Organizadores podem cadastrar a sua prova. Ela aparece aqui após aprovação." : "Tente outra distância ou cidade."}</div>
+        </div>
+      )}
+      <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:16 }}>
+        {shown.map(e => {
+          const link = safeUrl(e.official_url);
+          return (
+            <div key={e.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:18, padding:"16px 18px" }}>
+              <div style={{ fontSize:10, letterSpacing:2, color:"var(--blue)", textTransform:"uppercase", marginBottom:4, fontFamily:"'Syne',sans-serif" }}>{fmt(e.event_date)}</div>
+              <div style={{ fontSize:16, fontWeight:700, color:"var(--text)", fontFamily:"'Syne',sans-serif", marginBottom:3 }}>{e.name}</div>
+              <div style={{ fontSize:12, color:"var(--text3)" }}>{e.city}{e.address ? " · " + e.address : ""}</div>
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:10 }}>
+                {(e.distances || []).map(d => <span key={d} style={{ fontSize:10, color:"var(--blue)", background:"rgba(96,165,250,.1)", padding:"3px 10px", borderRadius:100 }}>{d}</span>)}
+              </div>
+              {e.price_info && <div style={{ fontSize:12, color:"var(--text2)", marginTop:10 }}>{e.price_info}</div>}
+              <div style={{ display:"flex", gap:8, marginTop:12, flexWrap:"wrap" }}>
+                {link && <a href={link} target="_blank" rel="noopener noreferrer" style={{ ...PF_LINK, background:"linear-gradient(135deg,var(--blue),#3b82f6)", color:"#fff" }}>Inscrição oficial</a>}
+                <button onClick={() => share(e)} style={{ ...PF_LINK, background:"var(--surface2)", color:"var(--text)", border:"1px solid var(--border)", cursor:"pointer" }}>Compartilhar</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={() => setShowForm(true)} style={{ width:"100%", padding:"14px", background:"transparent", border:"1px solid rgba(96,165,250,.35)", borderRadius:100, fontSize:12, color:"var(--blue)", cursor:"pointer", fontWeight:600, fontFamily:"'Syne',sans-serif" }}>Sou organizador — cadastrar corrida</button>
+      <div style={{ fontSize:10, color:"var(--text3)", textAlign:"center", marginTop:8, lineHeight:1.5 }}>O cadastro passa por validação antes da publicação.</div>
+      {showForm && <EventForm user={user} toast={toast} onClose={() => setShowForm(false)} onDone={() => { setShowForm(false); load(); }} />}
+    </div>
+  );
+}
+
+function EventForm({ user, toast, onClose, onDone }) {
+  const [f, setF] = useState({ name:"", city:"", address:"", event_date:"", price_info:"", official_url:"" });
+  const [dists, setDists] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const set = (k) => (e) => setF(v => ({ ...v, [k]: e.target.value }));
+  const toggle = (d) => setDists(a => a.includes(d) ? a.filter(x => x !== d) : [...a, d]);
+  const today = new Date().toISOString().slice(0, 10);
+  const submit = async () => {
+    setError("");
+    if (!sb || !user) { setError("Entre na sua conta para cadastrar."); return; }
+    if (f.name.trim().length < 3) { setError("Informe o nome da corrida."); return; }
+    if (!f.city.trim()) { setError("Informe a cidade."); return; }
+    if (!f.event_date || f.event_date < today) { setError("Informe uma data futura."); return; }
+    if (dists.length === 0) { setError("Escolha pelo menos uma distância."); return; }
+    if (f.official_url.trim() && !safeUrl(f.official_url)) { setError("O link de inscrição precisa começar com http:// ou https://"); return; }
+    setBusy(true);
+    const row = {
+      organizer_id: user.id, name: f.name.trim().slice(0, 100), city: f.city.trim().slice(0, 60),
+      address: f.address.trim().slice(0, 120), event_date: f.event_date, distances: dists,
+      price_info: f.price_info.trim().slice(0, 160), official_url: f.official_url.trim() ? safeUrl(f.official_url) : null
+    };
+    const { error: err } = await sb.from("events").insert(row);
+    setBusy(false);
+    if (err) { setError("Não foi possível enviar. Tente novamente."); return; }
+    toast("Corrida enviada para aprovação ✦");
+    onDone();
+  };
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:800, background:"rgba(0,0,0,.8)", display:"flex", alignItems:"flex-end", backdropFilter:"blur(8px)" }}>
+      <div style={{ background:"var(--surface)", borderRadius:"24px 24px 0 0", width:"100%", maxWidth:480, margin:"0 auto", padding:"24px 22px 40px", maxHeight:"92vh", overflowY:"auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+          <div style={{ fontSize:18, fontWeight:700, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>Cadastrar corrida</div>
+          <button onClick={onClose} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:100, padding:"6px 12px", cursor:"pointer", fontSize:12, color:"var(--text2)" }}>Fechar</button>
+        </div>
+        <input value={f.name} onChange={set("name")} placeholder="Nome da corrida *" style={PF_INPUT} />
+        <input value={f.city} onChange={set("city")} placeholder="Cidade *" style={PF_INPUT} />
+        <input value={f.address} onChange={set("address")} placeholder="Local de largada" style={PF_INPUT} />
+        <input value={f.event_date} onChange={set("event_date")} type="date" min={today} style={PF_INPUT} />
+        <div style={{ fontSize:11, fontWeight:600, color:"var(--text2)", margin:"4px 0 8px" }}>Distâncias *</div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+          {EVENT_DISTANCES.map(d => (
+            <button key={d} onClick={() => toggle(d)} style={{ padding:"7px 14px", background: dists.includes(d) ? "linear-gradient(135deg,var(--blue),#3b82f6)" : "var(--surface2)", border:"1px solid " + (dists.includes(d) ? "var(--blue)" : "var(--border)"), borderRadius:100, fontSize:12, color: dists.includes(d) ? "#fff" : "var(--text2)", cursor:"pointer" }}>{d}</button>
+          ))}
+        </div>
+        <input value={f.price_info} onChange={set("price_info")} placeholder="Valores e kit (ex: a partir de R$ 90)" style={PF_INPUT} />
+        <input value={f.official_url} onChange={set("official_url")} placeholder="Link oficial de inscrição (https://...)" autoCapitalize="none" style={PF_INPUT} />
+        <div style={{ fontSize:10, color:"var(--text3)", lineHeight:1.5, margin:"2px 0 12px" }}>Ao enviar, você declara ser o organizador (ou autorizado por ele) e que as informações são verdadeiras.</div>
+        {error && <div style={{ fontSize:12, color:"var(--red)", marginBottom:10 }}>{error}</div>}
+        <button onClick={submit} disabled={busy} style={{ width:"100%", padding:"15px", background:"linear-gradient(135deg,var(--blue),#3b82f6)", border:"none", borderRadius:100, fontSize:13, color:"#fff", fontWeight:700, cursor:"pointer", fontFamily:"'Syne',sans-serif" }}>
+          {busy ? "Enviando…" : "Enviar para aprovação"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AdminPanel({ onClose, toast }) {
+  const [tab, setTab] = useState("partners");
+  const [partners, setPartners] = useState(null);
+  const [events, setEvents] = useState(null);
+  const [stats, setStats] = useState({ users: "—", partners: "—", events: "—" });
+  const load = useCallback(async () => {
+    if (!sb) return;
+    const p = await sb.from("partners").select("*").eq("status", "pending").order("created_at", { ascending: true });
+    const e = await sb.from("events").select("*").eq("status", "pending").order("created_at", { ascending: true });
+    setPartners(p.data || []); setEvents(e.data || []);
+    const u = await sb.from("profiles").select("id", { count: "exact", head: true });
+    const ap = await sb.from("partners").select("id", { count: "exact", head: true }).eq("status", "approved");
+    const ae = await sb.from("events").select("id", { count: "exact", head: true }).eq("status", "approved");
+    setStats({ users: u.count == null ? "—" : u.count, partners: ap.count == null ? "—" : ap.count, events: ae.count == null ? "—" : ae.count });
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const decide = async (table, id, status) => {
+    const { error } = await sb.from(table).update({ status }).eq("id", id);
+    if (error) { toast("Não foi possível atualizar."); return; }
+    toast(status === "approved" ? "Aprovado ✦" : "Recusado");
+    load();
+  };
+  const fmt = (d) => new Date(d + "T12:00:00").toLocaleDateString("pt-BR");
+  const list = tab === "partners" ? partners : events;
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:900, background:"var(--bg)", overflowY:"auto", padding:"28px 22px 60px" }}>
+      <div style={{ maxWidth:480, margin:"0 auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+          <div>
+            <div style={{ fontSize:10, letterSpacing:3, color:"var(--accent)", textTransform:"uppercase", fontFamily:"'Syne',sans-serif" }}>Administração</div>
+            <div style={{ fontSize:22, fontWeight:700, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>Painel Presença</div>
+          </div>
+          <button onClick={onClose} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:100, padding:"7px 14px", cursor:"pointer", fontSize:12, color:"var(--text2)" }}>Fechar</button>
+        </div>
+        <div style={{ display:"flex", gap:8, marginBottom:18 }}>
+          {[["Usuários", stats.users], ["Parceiros", stats.partners], ["Corridas", stats.events]].map(([l, v]) => (
+            <div key={l} style={{ flex:1, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"12px 8px", textAlign:"center" }}>
+              <div style={{ fontSize:22, fontWeight:800, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>{v}</div>
+              <div style={{ fontSize:9, color:"var(--text3)", letterSpacing:1, textTransform:"uppercase" }}>{l}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+          {[["partners", "Parceiros pendentes"], ["events", "Corridas pendentes"]].map(([id, l]) => (
+            <button key={id} onClick={() => setTab(id)} style={{ flex:1, padding:"10px", background: tab === id ? "linear-gradient(135deg,var(--accent),var(--accent2))" : "var(--surface)", border:"1px solid " + (tab === id ? "var(--accent)" : "var(--border)"), borderRadius:100, fontSize:11, color: tab === id ? "#000" : "var(--text2)", cursor:"pointer", fontWeight:600 }}>{l}</button>
+          ))}
+        </div>
+        {list === null && <div style={{ textAlign:"center", padding:"30px 0" }}><Dots color="var(--text3)" /></div>}
+        {list && list.length === 0 && <div style={{ textAlign:"center", fontSize:13, color:"var(--text2)", padding:"30px 0" }}>Nada aguardando aprovação.</div>}
+        {list && list.map(it => (
+          <div key={it.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:"14px 16px", marginBottom:10 }}>
+            <div style={{ fontSize:15, fontWeight:600, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>{it.name}</div>
+            {tab === "partners" ? (
+              <div style={{ fontSize:12, color:"var(--text2)", lineHeight:1.6, marginTop:4 }}>
+                {((PARTNER_CATEGORIES.find(c => c.id === it.category) || {}).label || it.category) + " · " + it.city}
+                {it.description ? <div>{it.description}</div> : null}
+                <div>{"WhatsApp: " + (it.whatsapp || "—") + " · Tel: " + (it.phone || "—")}</div>
+                {it.instagram ? <div>{"Instagram: " + it.instagram}</div> : null}
+              </div>
+            ) : (
+              <div style={{ fontSize:12, color:"var(--text2)", lineHeight:1.6, marginTop:4 }}>
+                {fmt(it.event_date) + " · " + it.city}
+                <div>{"Distâncias: " + (it.distances || []).join(", ")}</div>
+                {it.price_info ? <div>{it.price_info}</div> : null}
+                {it.official_url ? <div style={{ wordBreak:"break-all" }}>{it.official_url}</div> : null}
+              </div>
+            )}
+            <div style={{ display:"flex", gap:8, marginTop:12 }}>
+              <button onClick={() => decide(tab === "partners" ? "partners" : "events", it.id, "approved")} style={{ flex:1, padding:"10px", background:"var(--green)", border:"none", borderRadius:100, fontSize:12, fontWeight:700, color:"#000", cursor:"pointer" }}>Aprovar</button>
+              <button onClick={() => decide(tab === "partners" ? "partners" : "events", it.id, tab === "partners" ? "blocked" : "rejected")} style={{ flex:1, padding:"10px", background:"transparent", border:"1px solid var(--red)", borderRadius:100, fontSize:12, fontWeight:600, color:"var(--red)", cursor:"pointer" }}>Recusar</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ProfileTab({ user, profile, setProfile, isPremium, onPaywall, onLogout, toast, push }) {
-  const [showAdmin, setShowAdmin]   = useState(false);
-  const [adminKey, setAdminKey]     = useState(() => localStorage.getItem("presenca_gemini_key") || "");
-  const [adminPass, setAdminPass]   = useState("");
-  const [adminUnlocked, setAdminUnlocked] = useState(false);
-  const ADMIN_PASS = "presenca2025";
   const [editing, setEditing]       = useState(false);
   const [editName, setEditName]     = useState(user?.name || "");
   const [showBadges, setShowBadges] = useState(false);
   const [showReferral, setShowReferral] = useState(false);
+  const [role, setRole] = useState("user");
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  useEffect(() => {
+    if (!sb || !user) return;
+    sb.from("profiles").select("role").eq("id", user.id).maybeSingle().then(({ data }) => { if (data && data.role) setRole(data.role); });
+  }, [user && user.id]);
 
   // Stats
   const analyses    = LS.get(`presenca_analyses_${user.id}`, []).length;
@@ -886,111 +1269,15 @@ function ProfileTab({ user, profile, setProfile, isPremium, onPaywall, onLogout,
         Sair da conta
       </button>
 
-      {/* ── Admin oculto — toque 5x no rodapé ── */}
-      <div style={{ textAlign:"center", marginTop:16, paddingBottom:8 }}>
-        <span onDoubleClick={() => setShowAdmin(true)} style={{ fontSize:10, color:"var(--surface3)", cursor:"default", userSelect:"none" }}>
-          v1.0 ✦
-        </span>
-      </div>
+      {role === "admin" && (
+        <button onClick={() => setShowAdminPanel(true)} style={{ width:"100%", padding:"14px", marginTop:12, background:"rgba(201,169,110,.1)", border:"1px solid rgba(201,169,110,.3)", borderRadius:100, fontSize:12, color:"var(--accent)", cursor:"pointer", fontWeight:700, fontFamily:"'Syne',sans-serif" }}>Painel administrativo</button>
+      )}
+      <div style={{ textAlign:"center", marginTop:16, paddingBottom:8, fontSize:10, color:"var(--text3)" }}>Presença v1.1</div>
+      {showAdminPanel && <AdminPanel onClose={() => setShowAdminPanel(false)} toast={toast} />}
 
       {/* Referral modal */}
       {showReferral && <ReferralModal user={user} onClose={() => setShowReferral(false)} toast={toast} />}
 
-      {/* Admin modal */}
-      {showAdmin && (
-        <div style={{ position:"fixed", inset:0, zIndex:900, background:"rgba(0,0,0,.9)", display:"flex", alignItems:"flex-end", backdropFilter:"blur(10px)" }}>
-          <div style={{ background:"var(--surface)", borderRadius:"24px 24px 0 0", width:"100%", maxWidth:480, margin:"0 auto", padding:"28px 24px 48px", animation:"slideUp .3s ease" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
-              <div>
-                <div style={{ fontSize:10, letterSpacing:3, color:"var(--accent)", textTransform:"uppercase", marginBottom:3, fontFamily:"'Syne',sans-serif" }}>Administrador</div>
-                <div style={{ fontSize:18, fontWeight:700, color:"var(--text)", fontFamily:"'Syne',sans-serif" }}>Configurações</div>
-              </div>
-              <button onClick={() => { setShowAdmin(false); setAdminPass(""); setAdminUnlocked(false); }} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:100, padding:"6px 12px", cursor:"pointer", fontSize:12, color:"var(--text2)" }}>
-                Fechar
-              </button>
-            </div>
-
-            {!adminUnlocked ? (
-              <>
-                <div style={{ fontSize:13, color:"var(--text2)", marginBottom:14 }}>Digite a senha de administrador para continuar.</div>
-                <input value={adminPass} onChange={e => setAdminPass(e.target.value)} type="password" placeholder="Senha admin"
-                  style={{ width:"100%", padding:"13px 16px", background:"var(--surface2)", border:"1px solid var(--border2)", borderRadius:12, fontSize:14, color:"var(--text)", outline:"none", fontFamily:"'Inter',sans-serif", marginBottom:12 }} />
-                <button onClick={() => {
-                  if (adminPass === ADMIN_PASS) { setAdminUnlocked(true); setAdminPass(""); }
-                  else { toast("Senha incorreta"); setAdminPass(""); }
-                }} style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg,var(--accent),var(--accent2))", border:"none", borderRadius:100, fontSize:13, color:"#000", fontWeight:700, cursor:"pointer", fontFamily:"'Syne',sans-serif" }}>
-                  Entrar
-                </button>
-              </>
-            ) : (
-              <>
-                {/* Proxy URL */}
-                <div style={{ marginBottom:20 }}>
-                  <div style={{ fontSize:11, fontWeight:600, color:"var(--text2)", marginBottom:6 }}>URL do Proxy (Cloudflare Worker)</div>
-                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:10, lineHeight:1.5 }}>
-                    Cole aqui a URL do seu Worker após criar em workers.cloudflare.com
-                  </div>
-                  <input
-                    value={localStorage.getItem("presenca_proxy_url") || ""}
-                    onChange={e => localStorage.setItem("presenca_proxy_url", e.target.value)}
-                    placeholder="https://presenca-proxy.seu-usuario.workers.dev"
-                    style={{ width:"100%", padding:"13px 16px", background:"var(--surface2)", border:"1px solid var(--border2)", borderRadius:12, fontSize:12, color:"var(--text)", outline:"none", fontFamily:"'Inter',sans-serif", marginBottom:8 }} />
-                  {localStorage.getItem("presenca_proxy_url") && (
-                    <div style={{ fontSize:11, color:"var(--green)" }}>✓ Proxy configurado</div>
-                  )}
-                </div>
-
-                {/* Chave do Gemini */}
-                <div style={{ marginBottom:20 }}>
-                  <div style={{ fontSize:11, fontWeight:600, color:"var(--text2)", marginBottom:6 }}>Chave da API Gemini</div>
-                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:10, lineHeight:1.5 }}>
-                    Acesse aistudio.google.com → Get API Key → Create API Key
-                  </div>
-                  <input value={adminKey} onChange={e => setAdminKey(e.target.value)} placeholder="AIzaSy... ou AQ.Ab8..." type="password"
-                    style={{ width:"100%", padding:"13px 16px", background:"var(--surface2)", border:`1px solid ${adminKey ? "var(--accent)" : "var(--border2)"}`, borderRadius:12, fontSize:13, color:"var(--text)", outline:"none", fontFamily:"'Inter',sans-serif", marginBottom:10 }} />
-
-                  {adminKey && (
-                    <div style={{ fontSize:11, color:"var(--accent)", marginBottom:10 }}>
-                      ✦ Chave: ...{adminKey.slice(-8)}
-                    </div>
-                  )}
-
-                  <button onClick={() => {
-                    if (!adminKey.trim()) { toast("Digite a chave primeiro"); return; }
-                    localStorage.setItem("presenca_gemini_key", adminKey.trim());
-                    toast("Chave salva! IA ativada ✦");
-                    setShowAdmin(false);
-                    setAdminUnlocked(false);
-                    setTimeout(() => window.location.reload(), 1000);
-                  }} style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg,var(--accent),var(--accent2))", border:"none", borderRadius:100, fontSize:13, color:"#000", fontWeight:700, cursor:"pointer", fontFamily:"'Syne',sans-serif", marginBottom:10 }}>
-                    ✦ Salvar e ativar IA
-                  </button>
-
-                  {localStorage.getItem("presenca_gemini_key") && (
-                    <button onClick={() => {
-                      localStorage.removeItem("presenca_gemini_key");
-                      setAdminKey("");
-                      toast("Chave removida");
-                    }} style={{ width:"100%", padding:"12px", background:"transparent", border:"1px solid var(--border)", borderRadius:100, fontSize:11, color:"var(--red)", cursor:"pointer" }}>
-                      Remover chave
-                    </button>
-                  )}
-                </div>
-
-                {/* Status da IA */}
-                <div style={{ background: localStorage.getItem("presenca_gemini_key") ? "rgba(62,207,142,.08)" : "rgba(248,113,113,.08)", border:`1px solid ${localStorage.getItem("presenca_gemini_key") ? "rgba(62,207,142,.2)" : "rgba(248,113,113,.2)"}`, borderRadius:12, padding:"12px 16px" }}>
-                  <div style={{ fontSize:12, fontWeight:600, color: localStorage.getItem("presenca_gemini_key") ? "var(--green)" : "var(--red)" }}>
-                    {localStorage.getItem("presenca_gemini_key") ? "✓ IA ativada e funcionando" : "✗ IA não configurada"}
-                  </div>
-                  <div style={{ fontSize:11, color:"var(--text3)", marginTop:3 }}>
-                    {localStorage.getItem("presenca_gemini_key") ? "Gemini 2.0 Flash · Grátis até 1.500 req/dia" : "Configure a chave acima para ativar"}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1292,12 +1579,6 @@ function completeChallenge(userId, trailId, challengeId) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MARKETPLACE
 // ═══════════════════════════════════════════════════════════════════════════════
-const STYLIST_PROFILES = [
-  { id:"s1", name:"Marina Voss",     title:"Stylist Arrojado",  avatar:"M", rating:4.9, reviews:128, verified:true,  specialty:"arrojado, presença executiva",    price_consult:"R$ 180",  online:true  },
-  { id:"s2", name:"Rafael Kenzo",    title:"Personal Stylist",   avatar:"R", rating:4.8, reviews:94,  verified:true,  specialty:"minimalismo, cápsula",             price_consult:"R$ 150",  online:false },
-  { id:"s3", name:"Isabela Torres",  title:"Consultora de Imagem",avatar:"I",rating:5.0, reviews:67,  verified:true,  specialty:"cores, identidade visual",         price_consult:"R$ 200",  online:true  },
-  { id:"s4", name:"André Lumière",   title:"Fashion Director",   avatar:"A", rating:4.7, reviews:156, verified:true,  specialty:"alto padrão, eventos",             price_consult:"R$ 250",  online:false },
-];
 
 const LOOKBOOKS = [
   { id:"l1", stylist:"Marina Voss",     title:"Guarda-Roupa Cápsula 2025",    desc:"32 peças, 100 combinações. Look atemporal e funcional.",    price:"R$ 89",  pages:48, style:"simples e limpo",   img:"https://images.unsplash.com/photo-1558769132-cb1aea458c5e?w=300&q=80" },
@@ -1443,195 +1724,11 @@ const SPORTSWEAR_PRODUCTS = [
   { id:"sw6", name:"Jaqueta Corta-Vento Slim",   brand:"New Balance",price:"R$ 320", img:"https://images.unsplash.com/photo-1551698618-1dfe5d97d256?w=300&q=80", modality:"corrida"    },
 ];
 
-const GYM_PARTNERS = [
-  {
-    id:"gp1", name:"Iron House Academia", city:"Taquara", state:"RS",
-    logo:"IH", color:"#1a1a2e", verified:true, open:true,
-    whatsapp:"5551999990010",
-    address:"Rua Independência, 540 — Centro",
-    about:"Academia completa com musculação, cardio, lutas e aulas coletivas. Ambiente climatizado e equipamentos de última geração.",
-    modalities:["Musculação","CrossFit","Boxe","Spinning","Pilates"],
-    plans:[
-      { name:"Mensal",  desc:"Acesso livre às dependências", price:"R$ 89",  period:"/mês",   highlight:false },
-      { name:"Trimestral", desc:"3 meses + 1 aula avulsa grátis", price:"R$ 79", period:"/mês", highlight:false },
-      { name:"Anual",   desc:"Melhor custo-benefício + app",  price:"R$ 59",  period:"/mês",   highlight:true  },
-    ],
-  },
-  {
-    id:"gp2", name:"Move Fitness Studio", city:"Igrejinha", state:"RS",
-    logo:"MV", color:"var(--green)", verified:true, open:true,
-    whatsapp:"5551999990011",
-    address:"Av. São Jacinto, 1.100",
-    about:"Studio boutique com personal trainer incluso em todos os planos. Turmas reduzidas para melhor resultado.",
-    modalities:["Funcional","Yoga","HIIT","Pilates Solo"],
-    plans:[
-      { name:"Studio",   desc:"Até 8 aulas/mês",               price:"R$ 120", period:"/mês",  highlight:false },
-      { name:"Ilimitado",desc:"Aulas ilimitadas + avaliação",   price:"R$ 180", period:"/mês",  highlight:true  },
-    ],
-  },
-  {
-    id:"gp3", name:"Titan Gym", city:"Novo Hamburgo", state:"RS",
-    logo:"TG", color:"#7c2d12", verified:false, open:false,
-    whatsapp:"5551999990012",
-    address:"Rua Dr. Maurício Cardoso, 332",
-    about:"Musculação com foco em hipertrofia. Equipamentos importados e suplementação no local.",
-    modalities:["Musculação","Cardio","Avaliação Física"],
-    plans:[
-      { name:"Mensal",  desc:"Acesso livre",      price:"R$ 79",  period:"/mês",  highlight:false },
-      { name:"Semestral",desc:"6 meses com desconto", price:"R$ 65", period:"/mês", highlight:true },
-    ],
-  },
-];
 
-const PERSONAL_TRAINERS = [
-  { id:"pt1", name:"Lucas Ferreira",   city:"Taquara",       avatar:"L", color:"var(--blue)", specialty:"Hipertrofia & Emagrecimento", cref:"CREF 123456-G/RS", experience:"8 anos", whatsapp:"5551999990020", instagram:"@lucasfitcoach",   price:"R$ 120", period:"por sessão",  online:true,  about:"Especialista em transformação corporal e periodização avançada. Atendo presencial e online." },
-  { id:"pt2", name:"Ana Paula Ramos",  city:"Igrejinha",     avatar:"A", color:"var(--purple)", specialty:"Funcional & Emagrecimento",  cref:"CREF 234567-G/RS", experience:"5 anos", whatsapp:"5551999990021", instagram:"@anapaulafit",     price:"R$ 100", period:"por sessão",  online:true,  about:"Formada em Ed. Física com pós em Treinamento Funcional. Foco em resultados reais." },
-  { id:"pt3", name:"Rodrigo Santos",   city:"Novo Hamburgo", avatar:"R", color:"var(--orange)", specialty:"CrossFit & Performance",     cref:"CREF 345678-G/RS", experience:"10 anos",whatsapp:"5551999990022", instagram:"@rodrigo_cross",    price:"R$ 150", period:"por sessão",  online:false, about:"Level 2 CrossFit Trainer. Preparação para competição e condicionamento de alto nível." },
-  { id:"pt4", name:"Camila Duarte",    city:"Gramado",       avatar:"C", color:"var(--green)", specialty:"Yoga & Mobilidade",          cref:"CREF 456789-G/RS", experience:"6 anos", whatsapp:"5551999990023", instagram:"@camilayoga",       price:"R$ 110", period:"por sessão",  online:true,  about:"Instrutora de Yoga e especialista em mobilidade funcional. Atendo grupos e individual." },
-];
 
 // ─── PersonaisSection (with rating system) ────────────────────────────────────
 function PersonaisSection({ user, toast }) {
-  const ratingsKey = `presenca_pt_ratings_${user.id}`;
-  const [ratings, setRatings]       = useState(() => LS.get(ratingsKey, {}));
-  const [ratingModal, setRatingModal] = useState(null); // { pt, tempStars, tempComment }
-  const [expandedPt, setExpandedPt]  = useState(null);
-
-  const submitRating = (ptId, stars, comment) => {
-    const updated = {
-      ...ratings,
-      [ptId]: { stars, comment, date: new Date().toISOString(), userId: user.id, userName: user.name || "Usuário" },
-    };
-    setRatings(updated);
-    LS.set(ratingsKey, updated);
-    setRatingModal(null);
-    toast("Avaliação enviada ✦");
-  };
-
-  const getAvgStars = (ptId) => {
-    const r = ratings[ptId];
-    return r ? r.stars : null;
-  };
-
-  return (
-    <div style={{ padding:"0 24px", display:"flex", flexDirection:"column", gap:14 }}>
-      {PERSONAL_TRAINERS.map((pt, i) => {
-        const myRating  = ratings[pt.id];
-        const isExpanded = expandedPt === pt.id;
-
-        return (
-          <div key={pt.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:20, overflow:"hidden", animation:`fadeIn .35s ease ${i*.07}s both` }}>
-            {/* Header */}
-            <div style={{ background:pt.color, padding:"16px 18px", display:"flex", alignItems:"center", gap:14 }}>
-              <div style={{ width:52, height:52, borderRadius:16, background:"rgba(255,255,255,.2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20, fontWeight:700, color:"#fff", flexShrink:0 }}>{pt.avatar}</div>
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:16, fontFamily:"'Syne',sans-serif", fontWeight:600, color:"#fff", marginBottom:2 }}>{pt.name}</div>
-                <div style={{ fontSize:11, color:"rgba(255,255,255,.65)", marginBottom:2 }}>{pt.specialty}</div>
-                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                  <div style={{ fontSize:10, color:"rgba(255,255,255,.5)" }}>{pt.cref}</div>
-                  <div style={{ fontSize:10, color:pt.online?"#a7f3d0":"rgba(255,255,255,.3)" }}>{pt.online?"● Online":"○ Presencial"}</div>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ padding:"16px 18px" }}>
-              {/* Info row */}
-              <div style={{ display:"flex", gap:12, marginBottom:12, flexWrap:"wrap" }}>
-                <div style={{ fontSize:11, color:"var(--text2)" }}>📍 {pt.city}</div>
-                <div style={{ fontSize:11, color:"var(--text2)" }}>🏆 {pt.experience} de exp.</div>
-                <div style={{ fontSize:11, color:"var(--text2)" }}>{pt.instagram}</div>
-              </div>
-
-              <p style={{ fontSize:12, color:"var(--text2)", lineHeight:1.55, marginBottom:12 }}>{pt.about}</p>
-
-              {/* Price */}
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
-                <div>
-                  <div style={{ fontSize:18, fontFamily:"'Syne',sans-serif", fontWeight:600, color:"var(--text)" }}>{pt.price}</div>
-                  <div style={{ fontSize:10, color:"var(--text3)" }}>{pt.period}</div>
-                </div>
-
-                {/* My rating display */}
-                {myRating ? (
-                  <div style={{ display:"flex", alignItems:"center", gap:6, background:"rgba(217,119,6,.1)", border:"1px solid rgba(217,119,6,.3)", borderRadius:20, padding:"5px 12px" }}>
-                    <span style={{ fontSize:12 }}>{"⭐".repeat(myRating.stars)}</span>
-                    <button onClick={() => setRatingModal({ pt, tempStars: myRating.stars, tempComment: myRating.comment || "" })}
-                      style={{ fontSize:9, color:"#d97706", background:"none", border:"none", cursor:"pointer", letterSpacing:.5 }}>
-                      Editar
-                    </button>
-                  </div>
-                ) : (
-                  <button onClick={() => setRatingModal({ pt, tempStars: 0, tempComment: "" })}
-                    style={{ padding:"6px 14px", background:"var(--surface2)", border:"1px solid var(--border2)", borderRadius:20, fontSize:10, color:"var(--text2)", cursor:"pointer", display:"flex", alignItems:"center", gap:5 }}>
-                    ☆ Avaliar
-                  </button>
-                )}
-              </div>
-
-              {/* Expand/collapse details */}
-              <button onClick={() => setExpandedPt(isExpanded ? null : pt.id)}
-                style={{ width:"100%", padding:"8px", background:"var(--surface)", border:"none", borderRadius:10, fontSize:11, color:"var(--text2)", cursor:"pointer", marginBottom:10, transition:"background .15s" }}>
-                {isExpanded ? "Ocultar detalhes ▲" : "Ver avaliações e contato ▼"}
-              </button>
-
-              {isExpanded && (
-                <div style={{ animation:"fadeIn .25s ease" }}>
-                  {/* All ratings */}
-                  {Object.entries(ratings).filter(([id]) => id === pt.id).length > 0 ? (
-                    <div style={{ background:"var(--surface)", borderRadius:12, padding:"12px 14px", marginBottom:10 }}>
-                      <div style={{ fontSize:10, letterSpacing:2, color:"var(--text3)", textTransform:"uppercase", marginBottom:8 }}>Avaliações</div>
-                      {Object.entries(ratings).filter(([id]) => id === pt.id).map(([, r]) => (
-                        <div key={r.userId} style={{ marginBottom:8 }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
-                            <span style={{ fontSize:12 }}>{"⭐".repeat(r.stars)}{"☆".repeat(5 - r.stars)}</span>
-                            <span style={{ fontSize:10, color:"var(--text3)" }}>{r.userName} · {new Date(r.date).toLocaleDateString("pt-BR",{day:"2-digit",month:"short"})}</span>
-                          </div>
-                          {r.comment && <p style={{ fontSize:12, color:"var(--text3)", margin:"0 0 0 2px", lineHeight:1.5, fontStyle:"italic" }}>"{r.comment}"</p>}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize:12, color:"var(--text3)", textAlign:"center", padding:"10px 0 14px" }}>Seja o primeiro a avaliar este personal.</div>
-                  )}
-
-                  {/* WhatsApp CTA */}
-                  <button onClick={() => {
-                    const msg = encodeURIComponent(`Olá ${pt.name}! Vi seu perfil no app Presença e tenho interesse em treinar com você. ✦`);
-                    window.open(`https://wa.me/${pt.whatsapp}?text=${msg}`, "_blank");
-                    toast(`Abrindo WhatsApp — ${pt.name} ✦`);
-                  }} style={{ width:"100%", padding:"13px", background:"#25d366", border:"none", borderRadius:14, fontSize:12, color:"#fff", cursor:"pointer", fontWeight:600, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-                    💬 Falar no WhatsApp
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-
-      {/* CTA cadastro personal */}
-      <div style={{ background:"var(--surface2)", borderRadius:18, padding:"18px 20px", textAlign:"center", border:"1.5px dashed #e0e0e0" }}>
-        <div style={{ fontSize:20, marginBottom:8 }}>💪</div>
-        <div style={{ fontSize:13, fontWeight:500, color:"var(--text)", marginBottom:4 }}>É personal trainer?</div>
-        <div style={{ fontSize:11, color:"var(--text2)", marginBottom:12, lineHeight:1.5 }}>Cadastre-se e receba alunos pelo app.</div>
-        <button onClick={() => toast("Em breve: cadastro de personais parceiros ✦")}
-          style={{ padding:"10px 20px", background:"var(--surface2)", border:"none", borderRadius:20, fontSize:11, color:"#fff", cursor:"pointer" }}>
-          Quero me cadastrar
-        </button>
-      </div>
-
-      {/* Rating modal */}
-      {ratingModal && (
-        <RatingModal
-          pt={ratingModal.pt}
-          initialStars={ratingModal.tempStars}
-          initialComment={ratingModal.tempComment}
-          onSubmit={(stars, comment) => submitRating(ratingModal.pt.id, stars, comment)}
-          onClose={() => setRatingModal(null)}
-        />
-      )}
-    </div>
-  );
+  return <PartnersList category="personal" user={user} toast={toast} emptyTitle="Nenhum personal cadastrado ainda" emptyText="Personais e profissionais de educação física podem se cadastrar gratuitamente." ctaLabel="Sou personal trainer — cadastrar" />;
 }
 
 function RatingModal({ pt, initialStars, initialComment, onSubmit, onClose }) {
@@ -1938,43 +2035,7 @@ Máximo 120 palavras. Linguagem simples, de amigo.`,
         </button>
         <h2 style={{ fontSize:20, fontFamily:"'Syne',sans-serif", fontWeight:600, color:"var(--text)" }}>Academias Parceiras</h2>
       </div>
-      <div style={{ padding:"0 20px", display:"flex", flexDirection:"column", gap:12 }}>
-        {GYM_PARTNERS.map((gym,i)=>(
-          <div key={gym.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:18, overflow:"hidden", animation:`fadeIn .35s ease ${i*.07}s both` }}>
-            <div style={{ background:gym.color, padding:"16px 18px", display:"flex", alignItems:"center", gap:14 }}>
-              <div style={{ width:44,height:44,borderRadius:12,background:"rgba(255,255,255,.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#fff",flexShrink:0 }}>{gym.logo}</div>
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:15,fontFamily:"'Syne',sans-serif",fontWeight:600,color:"#fff" }}>{gym.name}</div>
-                <div style={{ fontSize:11,color:"rgba(255,255,255,.6)" }}>📍 {gym.city}, {gym.state} · {gym.open?"● Aberta":"○ Fechada"}</div>
-              </div>
-            </div>
-            <div style={{ padding:"14px 18px" }}>
-              <p style={{ fontSize:12,color:"var(--text2)",lineHeight:1.5,marginBottom:12 }}>{gym.about}</p>
-              <div style={{ display:"flex",flexWrap:"wrap",gap:6,marginBottom:14 }}>
-                {gym.modalities.map(m=><div key={m} style={{ padding:"4px 10px",background:"var(--surface2)",borderRadius:100,fontSize:10,color:"var(--text2)" }}>{m}</div>)}
-              </div>
-              <div style={{ display:"flex",flexDirection:"column",gap:8,marginBottom:14 }}>
-                {gym.plans.map(plan=>(
-                  <div key={plan.name} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:plan.highlight?"linear-gradient(135deg,rgba(201,169,110,.15),rgba(201,169,110,.05))":"var(--surface2)",borderRadius:12,border:plan.highlight?"1px solid rgba(201,169,110,.2)":"1px solid var(--border)" }}>
-                    <div>
-                      <div style={{ fontSize:12,fontWeight:500,color:"var(--text)" }}>{plan.name}</div>
-                      <div style={{ fontSize:10,color:"var(--text3)",marginTop:1 }}>{plan.desc}</div>
-                    </div>
-                    <div style={{ textAlign:"right" }}>
-                      <div style={{ fontSize:14,fontWeight:700,color:plan.highlight?"var(--accent)":"var(--text)" }}>{plan.price}</div>
-                      <div style={{ fontSize:9,color:"var(--text3)" }}>{plan.period}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <button onClick={()=>{ const msg=encodeURIComponent(`Olá! Vi a ${gym.name} no app Presença e tenho interesse nos planos. ✦`); window.open(`https://wa.me/${gym.whatsapp}?text=${msg}`,"_blank"); toast(`Abrindo WhatsApp — ${gym.name} ✦`); }}
-                style={{ width:"100%",padding:"13px",background:"#25d366",border:"none",borderRadius:100,fontSize:12,color:"#fff",cursor:"pointer",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:8 }}>
-                💬 Falar no WhatsApp
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+      <PartnersList category="academia" user={user} toast={toast} emptyTitle="Nenhuma academia cadastrada ainda" emptyText="Academias e estúdios podem se cadastrar gratuitamente e aparecer para quem treina na sua cidade." ctaLabel="Tenho uma academia — cadastrar" />
     </div>
   );
 
@@ -1993,48 +2054,6 @@ const FACE_SHAPES = {
   losango:    { label:"Losango",     emoji:"💠", desc:"Maçãs do rosto proeminentes.", cuts:["Franja lateral","Corte clássico","Fade baixo","Natural"] },
 };
 
-const BARBERSHOPS = [
-  {
-    id:"bs1", name:"Gold Barbershop",   city:"Taquara", state:"RS",
-    logo:"G", color:"#c9a84c",
-    whatsapp:"5551999990001",
-    services:["Corte","Barba","Combo","Platinado"],
-    rating:4.9, reviews:203, verified:true, open:true,
-    address:"Rua Sinimbu, 312 — Centro",
-    about:"Especialistas em fade e barba desenhada. Ambiente premium, atendimento exclusivo.",
-    instagram:"@goldbarbershop",
-  },
-  {
-    id:"bs2", name:"Grisa Barbearia",   city:"Igrejinha", state:"RS",
-    logo:"GR", color:"var(--text2)",
-    whatsapp:"5551999990002",
-    services:["Corte","Barba","Sobrancelha","Hot Towel"],
-    rating:4.8, reviews:147, verified:true, open:true,
-    address:"Av. Borges de Medeiros, 880",
-    about:"Tradição e modernidade. Cortes clássicos e contemporâneos para todos os estilos.",
-    instagram:"@grisabarbearia",
-  },
-  {
-    id:"bs3", name:"Black Label Barber", city:"Novo Hamburgo", state:"RS",
-    logo:"BL", color:"var(--text)",
-    whatsapp:"5551999990003",
-    services:["Fade","Barba","Coloração","Sobrancelha"],
-    rating:5.0, reviews:89,  verified:true, open:false,
-    address:"Rua Frederico Mentz, 1200 — Florestal",
-    about:"Experiência de barbearia de alto padrão. Agendamento exclusivo.",
-    instagram:"@blacklabelbarber",
-  },
-  {
-    id:"bs4", name:"Corte & Estilo",    city:"Gramado", state:"RS",
-    logo:"CE", color:"#2d6a4f",
-    whatsapp:"5554999990004",
-    services:["Corte","Barba","Tratamento Capilar"],
-    rating:4.7, reviews:112, verified:false, open:true,
-    address:"Rua Garibaldi, 540 — Centro",
-    about:"O melhor corte da Serra Gaúcha. Produtos exclusivos e ambiente aconchegante.",
-    instagram:"@corteestilo_gramado",
-  },
-];
 
 const GROOMING_PRODUCTS = [
   { id:"g1", name:"Pomada Modeladora Matte",    brand:"American Crew", price:"R$ 89",  img:"https://images.unsplash.com/photo-1585747860715-2ba37e788b70?w=300&q=80", category:"cabelo" },
@@ -2191,20 +2210,7 @@ Máximo 3 produtos nacionais baratos. Passos simples.`,
 }
 
 // ── CorridaSection ───────────────────────────────────────────────────────────
-const RUNNING_COACHES = [
-  { id:"rc1", name:"Felipe Matos", title:"Assessoria Esportiva", city:"Taquara, RS", rating:4.9, reviews:47, price:"R$ 120/mês", whatsapp:"5551999990001", specialty:"Iniciantes e 5km", avatar:"FM", online:true, bio:"10 anos formando corredores do zero. Especialista em iniciantes." },
-  { id:"rc2", name:"Camila Dutra", title:"Professora de Corrida", city:"Igrejinha, RS", rating:4.8, reviews:38, price:"R$ 150/mês", whatsapp:"5551999990002", specialty:"Maratona e resistência", avatar:"CD", online:false, bio:"Maratonista com 6 anos de experiência em assessoria esportiva." },
-  { id:"rc3", name:"André Costa",  title:"Personal Runner",      city:"Novo Hamburgo, RS", rating:4.7, reviews:31, price:"R$ 100/mês", whatsapp:"5551999990003", specialty:"Emagrecimento correndo", avatar:"AC", online:true, bio:"Especialista em usar a corrida como ferramenta de emagrecimento." },
-];
 
-const RUNNING_PRODUCTS = [
-  { id:"rp1", name:"Tênis de Corrida Iniciante", brand:"Asics", price:"R$ 380", img:"https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=300&q=80", tag:"Melhor para começar" },
-  { id:"rp2", name:"Camiseta Dry-Fit UV50+",     brand:"Mizuno", price:"R$ 120", img:"https://images.unsplash.com/photo-1581655353564-df123a1eb820?w=300&q=80", tag:"Essencial" },
-  { id:"rp3", name:"Shorts com Bolso",           brand:"Nike",   price:"R$ 180", img:"https://images.unsplash.com/photo-1591389703635-e15a07b842d7?w=300&q=80", tag:"Conforto" },
-  { id:"rp4", name:"Relógio com GPS",            brand:"Garmin", price:"R$ 890", img:"https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=300&q=80", tag:"Evoluindo" },
-  { id:"rp5", name:"Cinto de Hidratação",        brand:"Salomon",price:"R$ 140", img:"https://images.unsplash.com/photo-1544117519-31a4b719223d?w=300&q=80", tag:"Treinos longos" },
-  { id:"rp6", name:"Meia de Compressão",         brand:"CEP",    price:"R$ 95",  img:"https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=300&q=80", tag:"Prevenção" },
-];
 
 function CorridaSection({ user, profile, isPremium, onPaywall, toast, onBack }) {
   const planKey = `presenca_corrida_plan_${user.id}`;
@@ -2259,7 +2265,7 @@ Máximo 4 semanas, ${diasSemana} treinos por semana. Use linguagem simples. Incl
 
         {/* Tab nav */}
         <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:4, marginBottom:16 }}>
-          {[["treino","🏃 Treino"],["produtos","👟 Produtos"],["professores","👤 Professores"]].map(([id,label]) => (
+          {[["treino","🏃 Treino"],["corridas","🏁 Corridas RS"],["assessorias","👤 Assessorias"]].map(([id,label]) => (
             <button key={id} onClick={() => setTab(id)} style={{ padding:"8px 16px", background:tab===id?"linear-gradient(135deg,var(--blue),#3b82f6)":"var(--surface)", border:`1px solid ${tab===id?"var(--blue)":"var(--border)"}`, borderRadius:100, fontSize:12, color:tab===id?"#fff":"var(--text2)", cursor:"pointer", whiteSpace:"nowrap", flexShrink:0, fontWeight:tab===id?700:400, transition:"all .15s" }}>
               {label}
             </button>
@@ -2354,73 +2360,12 @@ Máximo 4 semanas, ${diasSemana} treinos por semana. Use linguagem simples. Incl
       )}
 
       {/* ── PRODUTOS ── */}
-      {tab === "produtos" && (
+      {tab === "corridas" && <EventsRS user={user} toast={toast} />}
+
+      {tab === "assessorias" && (
         <div style={{ padding:"0 24px" }}>
-          <p style={{ fontSize:13, color:"var(--text2)", lineHeight:1.6, marginBottom:16 }}>
-            O que você realmente precisa para começar — sem gastar à toa.
-          </p>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            {RUNNING_PRODUCTS.map((p, i) => (
-              <div key={p.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", animation:`fadeIn .3s ease ${i*.06}s both` }}>
-                <img src={p.img} alt="" style={{ width:"100%", height:120, objectFit:"cover", display:"block" }} onError={e=>e.target.style.background="var(--surface2)"} />
-                <div style={{ padding:"10px 12px" }}>
-                  <div style={{ fontSize:9, color:"var(--blue)", letterSpacing:1.5, textTransform:"uppercase", marginBottom:2 }}>{p.tag}</div>
-                  <div style={{ fontSize:12, fontWeight:600, color:"var(--text)", lineHeight:1.3, marginBottom:2 }}>{p.name}</div>
-                  <div style={{ fontSize:10, color:"var(--text3)", marginBottom:8 }}>{p.brand}</div>
-                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                    <div style={{ fontSize:13, fontWeight:700, color:"var(--accent)" }}>{p.price}</div>
-                    <button onClick={() => toast("Abrindo produto… ✦")} style={{ padding:"5px 10px", background:"linear-gradient(135deg,var(--blue),#3b82f6)", border:"none", borderRadius:100, fontSize:9, color:"#fff", cursor:"pointer", fontWeight:700 }}>Ver</button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── PROFESSORES ── */}
-      {tab === "professores" && (
-        <div style={{ padding:"0 24px" }}>
-          <p style={{ fontSize:13, color:"var(--text2)", lineHeight:1.6, marginBottom:16 }}>
-            Assessorias esportivas e professores de corrida parceiros. Fale direto pelo WhatsApp.
-          </p>
-          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            {RUNNING_COACHES.map((coach, i) => (
-              <div key={coach.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:18, padding:"18px", animation:`fadeIn .35s ease ${i*.07}s both` }}>
-                <div style={{ display:"flex", gap:14, alignItems:"flex-start", marginBottom:12 }}>
-                  <div style={{ position:"relative" }}>
-                    <div style={{ width:48, height:48, borderRadius:24, background:"linear-gradient(135deg,var(--blue),#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:700, color:"#fff", flexShrink:0 }}>{coach.avatar}</div>
-                    {coach.online && <div style={{ position:"absolute", bottom:1, right:1, width:11, height:11, borderRadius:6, background:"var(--green)", border:"2px solid var(--surface)" }} />}
-                  </div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:14, fontWeight:600, color:"var(--text)", fontFamily:"'Syne',sans-serif", marginBottom:2 }}>{coach.name}</div>
-                    <div style={{ fontSize:11, color:"var(--text2)", marginBottom:2 }}>{coach.title}</div>
-                    <div style={{ fontSize:11, color:"var(--text3)" }}>📍 {coach.city}</div>
-                  </div>
-                  <div style={{ textAlign:"right" }}>
-                    <div style={{ fontSize:13, fontWeight:700, color:"var(--accent)" }}>{coach.price}</div>
-                    <div style={{ fontSize:10, color:"var(--text3)" }}>⭐ {coach.rating} ({coach.reviews})</div>
-                  </div>
-                </div>
-
-                <div style={{ background:"rgba(96,165,250,.08)", border:"1px solid rgba(96,165,250,.15)", borderRadius:10, padding:"8px 12px", marginBottom:12 }}>
-                  <div style={{ fontSize:10, color:"var(--blue)", fontWeight:600, marginBottom:2 }}>Especialidade</div>
-                  <div style={{ fontSize:12, color:"var(--text2)" }}>{coach.specialty}</div>
-                </div>
-
-                <p style={{ fontSize:12, color:"var(--text2)", lineHeight:1.5, marginBottom:12 }}>{coach.bio}</p>
-
-                <button onClick={() => {
-                  const msg = encodeURIComponent(`Olá ${coach.name}! Vi seu perfil no app Presença e tenho interesse na assessoria de corrida. Pode me dar mais informações? ✦`);
-                  window.open(`https://wa.me/${coach.whatsapp}?text=${msg}`, "_blank");
-                  toast(`Abrindo WhatsApp — ${coach.name} ✦`);
-                }} style={{ width:"100%", padding:"13px", background:"#25d366", border:"none", borderRadius:100, fontSize:12, color:"#fff", cursor:"pointer", fontWeight:600, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                  Falar com {coach.name.split(" ")[0]}
-                </button>
-              </div>
-            ))}
-          </div>
+          <p style={{ fontSize:13, color:"var(--text2)", lineHeight:1.6, marginBottom:14 }}>Assessorias esportivas e professores de corrida cadastrados no Presença.</p>
+          <PartnersList flush category="assessoria" user={user} toast={toast} emptyTitle="Nenhuma assessoria cadastrada ainda" emptyText="Assessorias e professores de corrida podem se cadastrar gratuitamente." ctaLabel="Tenho uma assessoria — cadastrar" />
         </div>
       )}
     </div>
@@ -2735,38 +2680,7 @@ function BarbeariaTab({ user, profile, isPremium, onPaywall, toast, push, onBadg
     <div style={{ padding:"0 24px 140px" }}>
       <div style={{ paddingTop:28, marginBottom:20 }}><Back /></div>
       <h3 style={{ fontSize:20, fontFamily:"'Syne',sans-serif", fontWeight:600, color:"var(--text)", marginBottom:16 }}>Barbearias Parceiras</h3>
-      <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-        {BARBERSHOPS.map((b,i) => (
-          <div key={b.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:18, overflow:"hidden", animation:`fadeIn .35s ease ${i*.07}s both` }}>
-            <div style={{ padding:"16px 18px", display:"flex", gap:14, alignItems:"center", borderBottom:"1px solid var(--border)" }}>
-              <div style={{ width:48, height:48, borderRadius:14, background:b.color, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, fontWeight:700, color:"#fff", flexShrink:0 }}>{b.logo}</div>
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:15, fontFamily:"'Syne',sans-serif", fontWeight:600, color:"var(--text)" }}>{b.name}</div>
-                <div style={{ fontSize:11, color:"var(--text2)" }}>📍 {b.city}, {b.state}</div>
-              </div>
-              <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-                <span style={{ fontSize:11, color:"#f59e0b" }}>⭐</span>
-                <span style={{ fontSize:12, fontWeight:600, color:"var(--text)" }}>{b.rating}</span>
-                <div style={{ width:6, height:6, borderRadius:3, background:b.open?"var(--green)":"var(--text3)", marginLeft:6 }} />
-              </div>
-            </div>
-            <div style={{ padding:"12px 18px" }}>
-              <p style={{ fontSize:12, color:"var(--text2)", lineHeight:1.5, marginBottom:12 }}>{b.about}</p>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
-                {b.services?.map(s => <span key={s} style={{ padding:"3px 10px", background:"var(--surface2)", borderRadius:100, fontSize:10, color:"var(--text2)" }}>{s}</span>)}
-              </div>
-              <button onClick={() => {
-                const msg = encodeURIComponent(`Olá! Vi a ${b.name} no app Presença e gostaria de agendar um horário. Quais os horários disponíveis? ✦`);
-                window.open(`https://wa.me/${b.whatsapp}?text=${msg}`, "_blank");
-                toast(`Abrindo WhatsApp — ${b.name} ✦`);
-              }} style={{ width:"100%", padding:"13px", background:"#25d366", border:"none", borderRadius:100, fontSize:12, color:"#fff", cursor:"pointer", fontWeight:600, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                Agendar pelo WhatsApp
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+      <PartnersList flush category="barbearia" user={user} toast={toast} emptyTitle="Nenhuma barbearia cadastrada ainda" emptyText="Barbearias e salões podem se cadastrar gratuitamente." ctaLabel="Tenho uma barbearia — cadastrar" />
     </div>
   );
 
@@ -4368,65 +4282,15 @@ function LojaLookbooks({ toast, onBack }) {
 }
 
 function LojaConsultores({ user, toast, onBack }) {
-  const [booking, setBooking] = useState(null);
-  const [date, setDate] = useState("");
   return (
-    <div style={{ padding:"0 24px 140px" }}>
-      <div style={{ paddingTop:32, marginBottom:20, display:"flex", alignItems:"center", gap:14 }}>
-        <button onClick={onBack} style={{ background:"none",border:"none",cursor:"pointer",padding:0 }}>
+    <div style={{ padding:"0 0 140px" }}>
+      <div style={{ padding:"32px 24px 20px", display:"flex", alignItems:"center", gap:14 }}>
+        <button onClick={onBack} style={{ background:"none", border:"none", cursor:"pointer", padding:0 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <h2 style={{ fontSize:20, fontFamily:"'Syne',sans-serif", fontWeight:600, color:"var(--text)" }}>Consultores de Estilo</h2>
       </div>
-      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        {STYLIST_PROFILES.map((s,i) => (
-          <div key={s.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:18, padding:"18px", animation:`fadeIn .35s ease ${i*.07}s both` }}>
-            <div style={{ display:"flex", gap:14, alignItems:"flex-start", marginBottom:12 }}>
-              <div style={{ position:"relative" }}>
-                <div style={{ width:48,height:48,borderRadius:24,background:"linear-gradient(135deg,var(--surface2),var(--surface3))",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"var(--text2)" }}>{s.avatar}</div>
-                {s.online && <div style={{ position:"absolute",bottom:1,right:1,width:11,height:11,borderRadius:6,background:"var(--green)",border:"2px solid var(--surface)" }}/>}
-              </div>
-              <div style={{ flex:1 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
-                  <div style={{ fontSize:14,fontWeight:600,color:"var(--text)",fontFamily:"'Syne',sans-serif" }}>{s.name}</div>
-                  {s.verified && <span style={{ fontSize:9,background:"rgba(62,207,142,.15)",color:"var(--green)",padding:"2px 7px",borderRadius:100 }}>✓</span>}
-                </div>
-                <div style={{ fontSize:11,color:"var(--text2)",marginBottom:3 }}>{s.title}</div>
-                <div style={{ fontSize:11,color:"var(--text3)" }}>⭐ {s.rating} · {s.reviews} avaliações</div>
-              </div>
-              <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize:14,fontWeight:700,color:"var(--accent)" }}>{s.price_consult}</div>
-                <div style={{ fontSize:9,color:"var(--text3)" }}>por hora</div>
-              </div>
-            </div>
-            <button onClick={() => setBooking(s)}
-              style={{ width:"100%",padding:"12px",background:"linear-gradient(135deg,var(--accent),var(--accent2))",border:"none",borderRadius:100,fontSize:11,color:"#000",cursor:"pointer",fontWeight:700,fontFamily:"'Syne',sans-serif" }}>
-              Agendar consulta
-            </button>
-          </div>
-        ))}
-      </div>
-      {booking && (
-        <div style={{ position:"fixed",inset:0,zIndex:600,background:"rgba(0,0,0,.7)",display:"flex",alignItems:"flex-end",backdropFilter:"blur(6px)" }}>
-          <div style={{ background:"var(--surface)",borderRadius:"24px 24px 0 0",width:"100%",maxWidth:480,margin:"0 auto",padding:"28px 24px 44px",animation:"slideUp .3s ease" }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
-              <div>
-                <div style={{ fontSize:10,letterSpacing:3,color:"var(--text3)",textTransform:"uppercase",marginBottom:3 }}>Agendar consulta</div>
-                <div style={{ fontSize:17,fontFamily:"'Syne',sans-serif",fontWeight:600,color:"var(--text)" }}>{booking.name}</div>
-              </div>
-              <button onClick={()=>setBooking(null)} style={{ background:"none",border:"none",cursor:"pointer" }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <input value={date} onChange={e=>setDate(e.target.value)} type="date"
-              style={{ width:"100%",padding:"13px 16px",background:"var(--surface2)",border:"1px solid var(--border2)",borderRadius:12,fontSize:13,color:"var(--text)",outline:"none",fontFamily:"'Inter',sans-serif",marginBottom:14 }} />
-            <button onClick={()=>{ toast(`Consulta agendada com ${booking.name} ✦`); setBooking(null); setDate(""); }} disabled={!date}
-              style={{ width:"100%",padding:"15px",background:date?"linear-gradient(135deg,var(--accent),var(--accent2))":"var(--surface3)",color:date?"#000":"var(--text3)",border:"none",borderRadius:100,fontSize:12,fontWeight:700,cursor:date?"pointer":"default",fontFamily:"'Syne',sans-serif" }}>
-              Confirmar agendamento
-            </button>
-          </div>
-        </div>
-      )}
+      <PartnersList category="consultor" user={user} toast={toast} emptyTitle="Nenhum consultor cadastrado ainda" emptyText="Consultores de imagem e estilo podem se cadastrar gratuitamente." ctaLabel="Sou consultor de imagem — cadastrar" />
     </div>
   );
 }
@@ -4482,14 +4346,7 @@ const BRECHO_CONDITIONS = [
 const DISCLAIMER = "O Presença apenas conecta compradores e vendedores. Toda negociação, pagamento e entrega é de responsabilidade exclusiva dos usuários. O app não se responsabiliza por transações, produtos ou qualquer problema decorrente das negociações.";
 
 // Seed listings for demo
-const SEED_LISTINGS = [
-  { id:"sl1", title:"Jaqueta Jeans Oversized", category:"jaqueta", size:"M", price:"R$ 85", condition:"otimo", brand:"Zara", description:"Usada poucas vezes, sem marcas. Cor azul médio clássico.", city:"São Paulo - SP", whatsapp:"5511999990001", sellerName:"Ana C.", createdAt: new Date(Date.now()-86400000*2).toISOString() },
-  { id:"sl2", title:"Tênis New Balance 574",   category:"tênis",   size:"40", price:"R$ 180",condition:"bom",  brand:"New Balance", description:"Comprei e ficou grande. Usado 3 vezes. Sem caixa.", city:"Curitiba - PR", whatsapp:"5541999990002", sellerName:"Pedro M.", createdAt: new Date(Date.now()-86400000*5).toISOString() },
-  { id:"sl3", title:"Blazer Preto Slim",       category:"camisa",  size:"G",  price:"R$ 120",condition:"otimo",brand:"Renner", description:"Blazer masculino preto, corte slim. Usado 2x. Impecável.", city:"Porto Alegre - RS", whatsapp:"5551999990003", sellerName:"Lucas F.", createdAt: new Date(Date.now()-86400000*1).toISOString() },
-  { id:"sl4", title:"Bolsa Estruturada Caramelo",category:"bolsa", size:"único",price:"R$ 95",condition:"bom", brand:"sem marca", description:"Bolsa feminina caramelo, alça dupla. Pequeno arranhão na base.", city:"Belo Horizonte - MG", whatsapp:"5531999990004", sellerName:"Julia R.", createdAt: new Date(Date.now()-86400000*3).toISOString() },
-  { id:"sl5", title:"Camiseta Básica Branca",  category:"camiseta",size:"M",  price:"R$ 25", condition:"otimo",brand:"Hering",  description:"Pacote com 2 camisetas brancas básicas. Lavadas, sem uso.", city:"Taquara - RS", whatsapp:"5551999990005", sellerName:"Carlos B.", createdAt: new Date(Date.now()-86400000*7).toISOString() },
-  { id:"sl6", title:"Calça Alfaiataria Bege",  category:"calça",   size:"38",  price:"R$ 140",condition:"novo",  brand:"Farm",   description:"Comprei na promoção e não serviu. Nova com etiqueta.", city:"Rio de Janeiro - RJ", whatsapp:"5521999990006", sellerName:"Mariana S.", createdAt: new Date(Date.now()-86400000*4).toISOString() },
-];
+const SEED_LISTINGS = []; // sem anúncios de demonstração
 
 function BrechoTab({ user, toast }) {
   const key = `presenca_brecho_${user.id}`;
@@ -4868,9 +4725,9 @@ function Paywall({ onClose, onUpgrade }) {
 
         <button onClick={upgrade} disabled={loading}
           style={{ width:"100%", padding:"16px", background:"var(--surface2)", color:"#fff", border:"none", borderRadius:16, fontSize:13, fontWeight:600, letterSpacing:1, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-          {loading ? <><Dots color="#fff" /> Processando…</> : "✦ Assinar agora"}
+          {loading ? <><Dots color="#fff" /> Processando…</> : "✦ Quero ser avisado"}
         </button>
-        <p style={{ fontSize:10, color:"var(--text3)", textAlign:"center", marginTop:10 }}>Simulação · sem cobrança real · cancele quando quiser</p>
+        <p style={{ fontSize:10, color:"var(--text3)", textAlign:"center", marginTop:10 }}>Em breve. Ainda não há cobrança.</p>
       </div>
     </div>
   );
@@ -5145,7 +5002,7 @@ const STYLES = `
 function App() {
   const [user, setUser] = useState(()=>LS.get("presenca_user",null));
   const [profile, setProfile] = useState(()=>{ const u=LS.get("presenca_user",null); return u?LS.get(`presenca_profile_${u.id}`,null):null; });
-  const [isPremium, setIsPremium] = useState(()=>{ const u=LS.get("presenca_user",null); return u?LS.get(`presenca_premium_${u.id}`,false):false; });
+  const [isPremium, setIsPremium] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
     const [showSearch, setShowSearch]   = useState(false);
@@ -5189,7 +5046,7 @@ function App() {
   const handleLogin = useCallback(async (u) => {
     setUser(u);
     const p = LS.get(`presenca_profile_${u.id}`,null);
-    const prem = LS.get(`presenca_premium_${u.id}`,false);
+    const prem = false;
     setProfile(p); setIsPremium(prem);
     if (!p) setShowOnboarding(true);
     // Streak
@@ -5209,7 +5066,7 @@ function App() {
   },[push,requestPermission]);
 
   const handleOnboardingDone = useCallback((answers)=>{ setProfile(answers); setShowOnboarding(false); },[]);
-  const handleUpgrade = useCallback(()=>{ LS.set(`presenca_premium_${user.id}`,true); setIsPremium(true); setShowPaywall(false); toast("Bem-vindo ao Premium ✦"); },[user]);
+  const handleUpgrade = useCallback(()=>{ setShowPaywall(false); toast("O Premium ainda não está disponível. Avisaremos você ✦"); },[toast]);
   const clearLocal = useCallback(()=>{ LS.del("presenca_user"); setUser(null); setProfile(null); setIsPremium(false); setActiveTab("Home"); },[]);
   const handleLogout = useCallback(()=>{ clearLocal(); if (sb) { try { sb.auth.signOut(); } catch(e) {} } },[clearLocal]);
 
@@ -5223,7 +5080,7 @@ function App() {
 
   useEffect(()=>{ document.title="Presença ✦"; },[]);
 
-  const tabProps = { user, profile, isPremium, onPaywall:()=>setShowPaywall(true), toast, push };
+  const tabProps = { user, profile, isPremium: BETA_OPEN || isPremium, onPaywall:()=>setShowPaywall(true), toast, push };
 
   if (!user) return (
     <>
@@ -5313,9 +5170,9 @@ function App() {
 
         {/* Tab content */}
         <div key={tabKey} style={{ opacity:tabVisible?1:0,transform:tabVisible?"none":"translateY(6px)",transition:"opacity .2s ease,transform .2s ease" }}>
-          {activeTab==="Home"      && <HomeTab user={user} profile={profile} isPremium={isPremium} onPaywall={()=>setShowPaywall(true)} toast={toast} push={push} onBadgeCheck={()=>checkBadgesAfterAction(user.id)} setActiveTab={changeTab} />}
+          {activeTab==="Home"      && <HomeTab user={user} profile={profile} isPremium={BETA_OPEN || isPremium} onPaywall={()=>setShowPaywall(true)} toast={toast} push={push} onBadgeCheck={()=>checkBadgesAfterAction(user.id)} setActiveTab={changeTab} />}
           {activeTab==="MeuEstilo" && <MeuEstiloTab {...tabProps} onBadgeCheck={()=>checkBadgesAfterAction(user.id)} />}
-          {activeTab==="Loja"      && <LojaHub user={user} isPremium={isPremium} onPaywall={()=>setShowPaywall(true)} toast={toast} setTab={changeTab} />}
+          {activeTab==="Loja"      && <LojaHub user={user} isPremium={BETA_OPEN || isPremium} onPaywall={()=>setShowPaywall(true)} toast={toast} setTab={changeTab} />}
           {activeTab==="Brecho"    && <BrechoTab user={user} toast={toast} />}
           {activeTab==="Academia"  && <AcademiaTab {...tabProps} onBadgeCheck={()=>checkBadgesAfterAction(user.id)} />}
           {activeTab==="Barbearia" && <BarbeariaTab {...tabProps} onBadgeCheck={()=>checkBadgesAfterAction(user.id)} />}
